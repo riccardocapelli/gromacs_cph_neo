@@ -140,6 +140,13 @@ public:
     //! Decide if we print output or not.
     bool isOutputStep(int64_t step) const;
 
+    /*! \brief Lambda x,v (interleaved) as they were at the start of the last updateLambdas() call.
+     *
+     * updateLambdas() runs right after do_force, before the checkpoint of that step is written,
+     * whereas the atoms are only advanced after the checkpoint. This is the lambda state that
+     * matches the atom state in the checkpoint. Empty before the first updateLambdas() call. */
+    gmx::ArrayRef<const real> lambdaStateAtStepStart() const { return lambdaStateAtStepStart_; }
+
 private:
     //! All the lambda coordinates used for simulation.
     std::vector<gmx::LambdaCoordinate> lambdaCoordinates_;
@@ -155,7 +162,10 @@ private:
     std::vector<int> allLambdaAtoms_;
     //! Booleans indicates whether an atom is a lambda atom
     std::vector<bool> isLambdaAtom_;
+    //! Number of home atoms in the current domain; the group potential sums over these only.
     int numHomeAtoms_ = 0;
+    //! Lambda x,v (interleaved) at the start of the last updateLambdas() call, for checkpointing.
+    std::vector<real> lambdaStateAtStepStart_;
     //! equal to eLambdaTcVRESCALE, ugly but effective.
     int eLambdaThermostat_ = 0;
     //! Total number of multi state constraint groups.

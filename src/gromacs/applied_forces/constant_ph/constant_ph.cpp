@@ -154,6 +154,9 @@ real pHDvdl(const real xx, const real st, const real a, const real pH, const rea
     ;
 }
 
+} // namespace
+
+// Declared in constant_ph.h (and exercised by the unit tests), so it must have external linkage.
 std::array<real, 15> init_lambda_dwp(const real barrier)
 {
     std::array<real, 15> lambda_dwp = { 0 };
@@ -364,6 +367,9 @@ std::array<real, 15> init_lambda_dwp(const real barrier)
     fclose(fw1);
     return lambda_dwp;
 }
+
+namespace
+{
 
 real gaussdist(gmx::DefaultRandomEngine* rng, real sigma)
 {
@@ -788,9 +794,12 @@ std::vector<real> calcIntPowerComponents(gmx::ArrayRef<const real> lambdaGroupPo
 
     if (pow == 1)
     {
-        for (const auto& l : lambdaGroupPowerComponent)
+        // Integral over x_intLambda of each degree-1 monomial x_j: x_j^2/2 for j == intLambda,
+        // x_j * x_intLambda otherwise (same result as the general recursion below).
+        for (int j = 0; j < lambdaGroupPowerComponent.ssize(); ++j)
         {
-            result.push_back((0 == intLambda ? l * l / 2. : l * lambdaGroupPowerComponent[intLambda]));
+            const real l = lambdaGroupPowerComponent[j];
+            result.push_back((j == intLambda ? l * l / 2. : l * lambdaGroupPowerComponent[intLambda]));
         }
         return result;
     }
@@ -1098,6 +1107,7 @@ real tcouple_vrescale_collective(gmx::ArrayRef<gmx::LambdaCoordinate> lambdaCoor
                                  const real                           dt,
                                  const real                           Ekin_total,
                                  const int                            numMultiStateConstraintGroups,
+                                 const int                            numChargeConstraintGroups,
                                  const int64_t                        step,
                                  const int64_t                        seed,
                                  const bool                           useChargeConstraints,
@@ -1109,11 +1119,12 @@ real tcouple_vrescale_collective(gmx::ArrayRef<gmx::LambdaCoordinate> lambdaCoor
 
     const real factor = exp(-1.0 * dt / tau);
 
-    // number of degrees of freedom (one less if constraint on)
+    // number of degrees of freedom: one less per constraint (each charge-constraint group
+    // and each multistate group contributes one row to the constraint matrix)
     int Nf = lambdaCoordinates.size();
     if (useChargeConstraints)
     {
-        Nf = Nf - 1;
+        Nf = Nf - numChargeConstraintGroups;
     }
     if (useMultiStateConstraits)
     {
@@ -1486,6 +1497,14 @@ ConstantPHLambdaEnergies ConstantPH::updateLambdas(const int64_t step)
 
     const int gmx_unused numThreads = gmx_omp_nthreads_get(ModuleMultiThread::Update);
 
+    // Keep the pre-update state for the checkpoint (see lambdaStateAtStepStart()).
+    lambdaStateAtStepStart_.resize(2 * lambdaCoordinates_.size());
+    for (gmx::Index i = 0; i < gmx::ssize(lambdaCoordinates_); i++)
+    {
+        lambdaStateAtStepStart_[2 * i]     = lambdaCoordinates_[i].x;
+        lambdaStateAtStepStart_[2 * i + 1] = lambdaCoordinates_[i].v;
+    }
+
 #pragma omp parallel for num_threads(numThreads) schedule(static)
     for (gmx::Index i = 0; i < gmx::ssize(lambdaCoordinates_); i++)
     {
@@ -1530,6 +1549,7 @@ ConstantPHLambdaEnergies ConstantPH::updateLambdas(const int64_t step)
     real deltaEkin = 0;
     switch (eLambdaThermostat_)
     {
+        case (eLambdaTcYes): // "yes" is an alias for V-rescale (see eLambdaTcoupl_names)
         case (eLambdaTcVRESCALE):
         {
 #pragma omp parallel for num_threads(numThreads) schedule(static) reduction(+ : deltaEkin)
@@ -1546,9 +1566,17 @@ ConstantPHLambdaEnergies ConstantPH::updateLambdas(const int64_t step)
             if (!isCalibrationRun_)
             {
                 real Ekin_new = tcouple_vrescale_collective(
-                        lambdaCoordinates_, referenceTemperature_, lambdaTau_, simulationDeltaT_,
-                        Ekin_total, numMultiStateConstraintGroups_, step, simulationLDSeed_,
-                        useChargeConstraints_, useMultiStateConstraits_);
+                        lambdaCoordinates_,
+                        referenceTemperature_,
+                        lambdaTau_,
+                        simulationDeltaT_,
+                        Ekin_total,
+                        numMultiStateConstraintGroups_,
+                        gmx::ssize(sumOfInitialLambdaConstraints_) - numMultiStateConstraintGroups_,
+                        step,
+                        simulationLDSeed_,
+                        useChargeConstraints_,
+                        useMultiStateConstraits_);
                 deltaEkin  = Ekin_new - Ekin_total;
                 Ekin_total = Ekin_new;
             }

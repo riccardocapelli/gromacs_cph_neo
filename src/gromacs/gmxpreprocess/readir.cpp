@@ -2741,6 +2741,41 @@ void get_ir(const char*     mdparin,
                     "cpHMD (lambda-dynamics) cannot be combined with free-energy perturbation "
                     "(free-energy != no).");
         }
+        if (ir->useMts)
+        {
+            /* With MTS the slow forces (PME mesh by default, possibly non-bonded or pairs) are
+             * only computed every mts-level2-factor steps, but lambda is integrated every step
+             * from the per-atom potential, which would then lack those contributions. */
+            wi->addError(
+                    "cpHMD (lambda-dynamics) cannot be combined with multiple time stepping "
+                    "(mts = yes): the per-atom electrostatic potential that drives dV/dlambda "
+                    "would miss the slow-force contributions on the fast steps.");
+        }
+        if (!(ir->coulombtype == CoulombInteractionType::Cut || ir->coulombtype == CoulombInteractionType::RF
+              || ir->coulombtype == CoulombInteractionType::Pme))
+        {
+            /* Only the non-bonded kernels (real space) and the PME gather (reciprocal space)
+             * produce the per-atom potential. Plain Ewald (and anything else) would give a
+             * dV/dlambda without its long-range part. */
+            wi->addError(gmx::formatString(
+                    "cpHMD (lambda-dynamics) supports coulombtype = Cut-off, Reaction-Field or "
+                    "PME only; with coulombtype = %s the per-atom electrostatic potential that "
+                    "drives dV/dlambda would be incomplete.",
+                    enumValueToString(ir->coulombtype)));
+        }
+        if (ir->eI == IntegrationAlgorithm::MD && !integratorHasReferenceTemperature(*ir))
+        {
+            /* ref-t is only read with temperature coupling, so the lambda dynamics would use
+             * T = 0: no pH term (kT ln10 (pKa - pH)) and a lambda thermostat at 0 K. This is
+             * a warning rather than an error, so force-path comparisons in NVE remain possible
+             * with -maxwarn. */
+            wi->addWarning(
+                    "cpHMD (lambda-dynamics) takes its temperature from ref-t, which is not used "
+                    "without temperature coupling (tcoupl = no). The lambda dynamics will then "
+                    "run at 0 K: the pH term kT ln(10) (pKa - pH) vanishes and the lambda "
+                    "thermostat drives the lambda velocities to zero. Use temperature coupling "
+                    "for production runs.");
+        }
         ir->lambdaDynamicsSimulationParameters =
                 std::make_unique<gmx::LambdaDynamicsSimulationParameters>(&inp, wi);
     }
@@ -5366,6 +5401,50 @@ void triple_check(const char* mdparin, const t_inputrec& ir, const gmx_mtop_t& s
     if (ir.lambda_dynamics)
     {
         gmx::checkLambdaParams(*ir.lambdaDynamicsSimulationParameters, wi);
+
+        /* [ pairs ] with function type 2 (LJC14_Q) carry their own fixed charges in the
+         * interaction parameters, so their Coulomb energy does not follow lambda, while the
+         * pair kernel would still add their contribution to the per-atom potential. Refuse
+         * such pairs on lambda atoms rather than produce an inconsistent dV/dlambda. */
+        std::vector<bool> isLambdaAtom(sys.natoms, false);
+        for (const auto& collection : ir.lambdaDynamicsSimulationParameters->lambdaAtomsCollections())
+        {
+            for (const int atom : collection.atomIndicies())
+            {
+                if (atom >= 0 && atom < sys.natoms)
+                {
+                    isLambdaAtom[atom] = true;
+                }
+            }
+        }
+        int numLjc14qPairsOnLambdaAtoms = 0;
+        int atomOffset                  = 0;
+        for (const gmx_molblock_t& molb : sys.molblock)
+        {
+            const gmx_moltype_t&     molt = sys.moltype[molb.type];
+            const InteractionList&   il   = molt.ilist[InteractionFunction::LennardJonesCoulomb14Q];
+            gmx::ArrayRef<const int> ia   = il.iatoms;
+            for (int mol = 0; mol < molb.nmol; mol++)
+            {
+                for (int i = 0; i < il.size(); i += 3)
+                {
+                    if (isLambdaAtom[atomOffset + ia[i + 1]] || isLambdaAtom[atomOffset + ia[i + 2]])
+                    {
+                        numLjc14qPairsOnLambdaAtoms++;
+                    }
+                }
+                atomOffset += molt.atoms.nr;
+            }
+        }
+        if (numLjc14qPairsOnLambdaAtoms > 0)
+        {
+            wi->addError(gmx::formatString(
+                    "%d [ pairs ] interaction(s) of function type 2 (LJC14_Q, with explicit "
+                    "charges) involve constant-pH lambda atoms. Their charges are fixed "
+                    "parameters that do not follow lambda, which constant pH does not support. "
+                    "Use function type 1 pairs for titratable atoms.",
+                    numLjc14qPairsOnLambdaAtoms));
+        }
     }
 }
 

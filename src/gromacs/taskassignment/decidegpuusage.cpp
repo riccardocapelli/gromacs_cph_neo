@@ -223,6 +223,12 @@ bool canUseGpusForNonbonded(const t_inputrec& ir, const bool doRerun, std::strin
                           "Constant pH (lambda dynamics) needs the per-atom electrostatic "
                           "potential from the non-bonded kernel, which is implemented for CUDA "
                           "and HIP only.");
+    /* Constant-pH with plain cut-off: the GPU kernels without energy output skip excluded pairs
+     * for coulombtype = Cut-off (no exclusion forces exist there), so the excluded-pair term of
+     * the per-atom potential would be missing on all steps that do not compute energies. */
+    errorReasons.appendIf(ir.lambda_dynamics && ir.coulombtype == CoulombInteractionType::Cut,
+                          "Constant pH (lambda dynamics) with coulombtype = Cut-off is not "
+                          "supported on GPUs; use reaction-field or PME.");
     errorReasons.finishContext();
     if (error != nullptr)
     {

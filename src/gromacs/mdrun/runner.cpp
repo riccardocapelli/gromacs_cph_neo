@@ -1422,13 +1422,25 @@ int Mdrunner::mdrunner()
     // will work. It likely would not work in cases where ranks
     // have heterogeneous device types or vendors unless the MPI
     // library supported that.
-    const bool canUseDirectGpuComm =
+    bool canUseDirectGpuComm =
             decideWhetherDirectGpuCommunicationCanBeUsed(hwinfo_->minGpuAwareMpiStatus,
                                                          inputrec->useMts,
                                                          replExParams.exchangeInterval > 0,
                                                          (inputrec->eSwapCoords != SwapType::No),
                                                          gpusWereDetected,
                                                          mdlog);
+    // Constant pH: direct GPU communication (GPU halo exchange, GPU PME-PP) requires GPU buffer
+    // ops, but the cph classic GPU path -- the only one available with more than one rank --
+    // keeps them off so the per-atom potential and the lambda charges go through the host.
+    if (canUseDirectGpuComm && inputrec->lambda_dynamics)
+    {
+        GMX_LOG(mdlog.info)
+                .asParagraph()
+                .appendText(
+                        "Constant pH (lambda dynamics): direct GPU communication is disabled; "
+                        "halo exchange runs on the CPU.");
+        canUseDirectGpuComm = false;
+    }
 
     // Initialize development feature flags that enabled by environment variable
     // and report those features that are enabled.

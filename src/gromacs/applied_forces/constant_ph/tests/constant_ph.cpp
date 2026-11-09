@@ -237,6 +237,24 @@ TEST_F(ConstantPHPartitionTest, SingleRankIncludesAllAtomPotentials)
     EXPECT_EQ(constantPH_->allLambdaAtoms().size(), 2);
 }
 
+TEST_F(ConstantPHPartitionTest, KeepsLambdaStateFromStepStartForCheckpoint)
+{
+    EXPECT_TRUE(constantPH_->lambdaStateAtStepStart().empty());
+
+    constantPH_->updateAfterPartition(nullptr, 2, 2);
+    auto& lambdaCoordinate      = constantPH_->lambdaCoordinates()[0];
+    lambdaCoordinate.x          = 0.6;
+    lambdaCoordinate.v          = 0.2;
+    constantPH_->potential()[0] = 3;
+    constantPH_->potential()[1] = 5;
+
+    constantPH_->updateLambdas(0);
+    // Whatever the update did to x,v, the checkpoint must see the values from the step start.
+    ASSERT_EQ(constantPH_->lambdaStateAtStepStart().size(), 2);
+    EXPECT_REAL_EQ(constantPH_->lambdaStateAtStepStart()[0], 0.6);
+    EXPECT_REAL_EQ(constantPH_->lambdaStateAtStepStart()[1], 0.2);
+}
+
 TEST_F(ConstantPHPartitionTest, AtomSetupRefreshesPotentialViewAfterResize)
 {
     t_forcerec forceRecord;

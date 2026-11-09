@@ -516,8 +516,12 @@ LambdaDynamicsSimulationParameters::LambdaDynamicsSimulationParameters(std::vect
     printStringNoNewline(inp, "Thermostat being used for lambda particles");
     opt                = base + "-themorstat";
     eLambdaThermostat_ = get_eeenum(inp, opt, eLambdaTcoupl_names, wi);
-    GMX_RELEASE_ASSERT(eLambdaThermostat_ != eLambdaTcLangevin,
-                       "Langevin dynamics currently doesn't work in constant pH");
+    if (eLambdaThermostat_ == eLambdaTcLangevin)
+    {
+        wi->addError(
+                "Langevin dynamics for the lambda particles is not supported in constant pH; "
+                "use lambda-dynamics-themorstat = v-rescale.");
+    }
 
     printStringNoNewline(inp, "Mass for the lambda particles");
     opt                 = base + "-lambda-particle-mass";

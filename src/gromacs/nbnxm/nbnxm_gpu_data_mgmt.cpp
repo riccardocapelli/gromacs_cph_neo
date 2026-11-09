@@ -1027,6 +1027,12 @@ void gpu_init_atomdata(NbnxmGpu* nb, const nbnxn_atomdata_t* nbat)
 
             freeDeviceBuffer(&atdat->f);
             freeDeviceBuffer(&atdat->xq);
+            /* Constant-pH buffers, allocated below with the same condition. */
+            if (atdat->computePotential)
+            {
+                freeDeviceBuffer(&atdat->potential);
+                freeDeviceBuffer(&atdat->lambdaCharges);
+            }
             if (useLjCombRule(nb->nbparam->vdwType))
             {
                 freeDeviceBuffer(&atdat->ljComb);

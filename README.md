@@ -85,8 +85,8 @@ If you use constant-pH MD, cite:
 6. **Leap-frog (MD) integrator only.** Other integrators set the constant-pH
    charges but do not perform λ dynamics.
 
-7. **λ thermostat: no Langevin** (fails a runtime assertion); use a supported
-   λ thermostat.
+7. **λ thermostat: v-rescale only** (`lambda-dynamics-themorstat = v-rescale`, or its alias
+   `yes`). Langevin is refused by `grompp`.
 
 8. **Constant pH cannot be combined with free-energy perturbation.** `lambda-dynamics = yes`
    together with `free-energy != no` is refused by `grompp`. The 1-4 pair kernel cannot
@@ -94,18 +94,35 @@ If you use constant-pH MD, cite:
    λ dynamics needs, so allowing the combination would silently change the free-energy
    results.
 
-9. **`.tpr` files are not portable** between the original 2021 fork and this 2026
+9. **Other combinations that would give an incomplete dV/dλ are refused**, so they fail
+   loudly instead of silently:
+    - `grompp`: multiple time stepping (`mts = yes`; the slow forces, including the PME
+      mesh, would be missing from the potential on the fast steps); any `coulombtype`
+      other than Cut-off, Reaction-Field or PME (plain Ewald has no per-atom potential);
+      `[ pairs ]` of function type 2 (explicit charges, which do not follow λ) on λ atoms.
+    - `mdrun`: shells / polarizable models and flexible constraints; replica exchange
+      (it would swap the atoms but not λ); `coulombtype = Cut-off` with GPU non-bonded
+      (`-nb auto` falls back to the CPU).
+    - Multi-rank GPU runs use CPU halo exchange: direct GPU communication is turned off
+      for constant pH, because the classic GPU path it needs keeps GPU buffer ops off.
+
+10. **The λ temperature is `ref-t`, so use temperature coupling.** Without it
+    (`tcoupl = no`) `ref-t` is not read and the λ dynamics runs at 0 K: no pH term and a
+    λ thermostat that stops the λ particles. `grompp` warns; override with `-maxwarn` only
+    for force-path comparisons, not for production.
+
+11. **`.tpr` files are not portable** between the original 2021 fork and this 2026
    port (tpx version gap). Always `grompp` with the same build you run `mdrun`
    with.
 
-10. **SIMD is the default cph kernel** (AVX2). Set `GMX_CPH_NO_SIMD=1` to fall back
+12. **SIMD is the default cph kernel** (AVX2). Set `GMX_CPH_NO_SIMD=1` to fall back
     to the slower plain-C reference kernel (debugging only).
 
-11. **On the GPU path the per-step host↔device traffic is still O(N_atoms)** (potential
+13. **On the GPU path the per-step host↔device traffic is still O(N_atoms)** (potential
     copied back, λ charges pushed out) rather than O(N_groups). Correct, but not yet
     the intended performance.
 
-12. **Science-level validation incomplete.** The force/energy path, checkpointing,
+14. **Science-level validation incomplete.** The force/energy path, checkpointing,
     and `gmx cphmd` are validated against the fork, but higher-level checks
     (titration / pKa vs the fork, a full production window, refdata regression)
     have not been done.

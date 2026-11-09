@@ -611,3 +611,54 @@ tests from a temporary compile stream; the repository retains them unchanged.
 No full multi-process MPI trajectory or GPU regression was run. The mapping tests
 use synthetic domain ownership and do not exercise MPI collectives themselves.
 
+### 🛡️ Review fixes: silent-zero guards, checkpoint lambda step, thermostat DoF (2026-11-09, branch `cph-fixes`)
+
+A code review of the whole port (after merging PR #2) found several ways to get a wrong
+dV/dλ without any error, plus a few plain bugs. Fixed here; nothing below changes the
+single-rank, RF/PME, single-charge-constraint-group path that the gates validate, except
+the checkpoint fix (which makes `-cpi` continuations exact).
+
+**Refused combinations** (each used to run with an incomplete per-atom potential):
+- `grompp` (`readir.cpp`): `mts = yes` (PME mesh / slow forces missing on fast steps);
+  `coulombtype` other than Cut-off/RF/PME (plain Ewald has no potential path);
+  `[ pairs ]` funct 2 (`LJC14_Q`, fixed charges in the parameters) on λ atoms; Langevin
+  λ thermostat is now a grompp error instead of a `GMX_RELEASE_ASSERT`.
+- `grompp` warning: `tcoupl = no` with `integrator = md` — `ref-t` is not read, so the λ
+  dynamics runs at T = 0 (no pH term, λ thermostat to 0 K). Warning, not error, so NVE
+  force-path comparisons stay possible with `-maxwarn`. **The M6 60-step λ traces were run
+  this way**; they still validate the force path, not the pH term.
+- `mdrun` (`md.cpp`): shells / flexible constraints (`relax_shell_flexcon` calls `do_force`
+  itself, so charges were never λ-updated and the potential never cleared); replica exchange
+  (swaps atoms, not λ).
+- GPU: `coulombtype = Cut-off` with GPU NB (the force-only GPU kernels skip excluded pairs
+  for plain cut-off, `EXCLUSION_FORCES` is energy-only there); direct GPU communication is
+  disabled for cph (`runner.cpp`) — it requires buffer ops, which the classic cph GPU path
+  turns off, so every multi-rank `-nb gpu` cph run hit the `"Offload features enabled
+  require X/F buffer ops"` release assert.
+
+**Fixes:**
+- **Checkpoint off by one λ step.** `updateLambdas(step)` runs before the checkpoint of that
+  step is written, the atoms are advanced after it, so the checkpoint held λ(s+1) with x(s)
+  and a restart integrated λ twice for step s. `ConstantPH` now keeps the λ x,v from the
+  start of the step (`lambdaStateAtStepStart()`), which `checkpoint.cpp` writes. Reading a
+  checkpoint whose λ-coordinate count differs from the tpr is now a fatal error.
+  Verified (local macOS CPU build, 216-SPC water with 2 λ waters, PME, v-rescale): 20-step
+  continuous run vs 10 steps + `-cpi` 10 steps, per-step λ (`GMX_CPH_DUMP_LAMBDAS`)
+  **identical**; the pre-fix binary gave λ one step ahead after the restart.
+- **λ thermostat degrees of freedom**: subtract one per charge-constraint group, not one in
+  total (unchanged with a single group).
+- **Multistate reference potential** (`calcIntPowerComponents`, power 1): tested `0 ==
+  intLambda` instead of the monomial index; energy only (`pot_ref`), forces unaffected.
+  Checked against the general recursion of the same function: old shortcut off by up to
+  0.125, fixed one identical.
+- `lambda-dynamics-themorstat = yes` (declared alias of v-rescale) asserted at the first step;
+  now handled as v-rescale.
+- GPU: `potential`/`lambdaCharges` device buffers leaked on every atom-data reallocation.
+- `init_lambda_dwp` had internal linkage although declared in the header, so
+  `constant_ph-test` did not link; it now builds and passes (9 tests, incl. PR #2's six and a
+  new checkpoint-state test).
+
+**Not validated here:** the GPU changes (no GPU locally; compile-checked only for the shared
+host code — CUDA/HIP kernels untouched) and multi-rank runs. Known, not fixed: energy
+reporting (λ potential counted once per DD rank; λ kinetic energy overwritten by
+`compute_globals`), λ initial velocity always 0, thermostat seed stored as `real`.

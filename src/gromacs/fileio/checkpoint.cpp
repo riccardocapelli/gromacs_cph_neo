@@ -2375,14 +2375,45 @@ static int doCptConstantpH(XdrSerializer* serializer, bool bRead, int fflags, Co
                         lambdaCoordinatesTmp.resize(numResidues);
                         lambdaCoordinates = lambdaCoordinatesTmp;
                     }
-                    break;
-                case eConstantpH_DATA:
-                    for (auto& lambdaCoordinate : lambdaCoordinates)
+                    if (bRead && (constantpH != nullptr) && numResidues != gmx::ssize(lambdaCoordinates))
                     {
-                        do_cpt_real_err(serializer, &lambdaCoordinate.x);
-                        do_cpt_real_err(serializer, &lambdaCoordinate.v);
+                        gmx_fatal(FARGS,
+                                  "The checkpoint contains %d constant-pH lambda coordinates, but "
+                                  "the run input file defines %d. Restart with the run input file "
+                                  "the checkpoint was written with.",
+                                  numResidues,
+                                  int(gmx::ssize(lambdaCoordinates)));
                     }
                     break;
+                case eConstantpH_DATA:
+                {
+                    /* Lambda is integrated right after do_force, before the checkpoint is written
+                     * in the same step, while the atoms are only advanced after it. Write the
+                     * lambda state from the start of that step, so it matches the atom state in
+                     * the checkpoint and a continuation repeats exactly the same lambda step. */
+                    gmx::ArrayRef<const real> stateAtStepStart;
+                    if (!bRead && constantpH != nullptr)
+                    {
+                        stateAtStepStart = constantpH->lambdaStateAtStepStart();
+                    }
+                    for (gmx::Index c = 0; c < gmx::ssize(lambdaCoordinates); c++)
+                    {
+                        auto& lambdaCoordinate = lambdaCoordinates[c];
+                        if (!stateAtStepStart.empty())
+                        {
+                            real x = stateAtStepStart[2 * c];
+                            real v = stateAtStepStart[2 * c + 1];
+                            do_cpt_real_err(serializer, &x);
+                            do_cpt_real_err(serializer, &v);
+                        }
+                        else
+                        {
+                            do_cpt_real_err(serializer, &lambdaCoordinate.x);
+                            do_cpt_real_err(serializer, &lambdaCoordinate.v);
+                        }
+                    }
+                    break;
+                }
                 default:
                     gmx_fatal(FARGS,
                               "Unknown constant-pH checkpoint entry %d\n"

@@ -367,6 +367,20 @@ void gmx::LegacySimulator::do_md()
                                                 ir->nstcalcenergy,
                                                 haveDDAtomOrdering(*cr_),
                                                 simulationWork);
+    if (constantph_ && shellfc)
+    {
+        /* relax_shell_flexcon() calls do_force itself, bypassing the per-step lambda-charge
+         * update and the clearing of the per-atom potential below. */
+        gmx_fatal(FARGS,
+                  "Constant pH (lambda dynamics) is not supported with shells (polarizable "
+                  "models) or flexible constraints.");
+    }
+    if (constantph_ && useReplicaExchange)
+    {
+        /* Replica exchange swaps the atom state but not the lambda coordinates, which would
+         * leave each configuration with the titration state of another replica. */
+        gmx_fatal(FARGS, "Constant pH (lambda dynamics) is not supported with replica exchange.");
+    }
 
     ObservablesReducer observablesReducer = observablesReducerBuilder_->build();
 
